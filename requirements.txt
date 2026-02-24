@@ -1,0 +1,11 @@
+streamlit==1.31.0
+pandas==2.2.0
+python-dotenv==1.0.1
+pydantic==2.6.1
+langchain-nvidia-ai-endpoints==0.0.1
+langchain-core==0.1.23
+langchain-community==0.0.20
+langgraph==0.0.24
+faiss-cpu==1.7.4
+pyarrow==15.0.0
+fastparquet==2023.10.1
