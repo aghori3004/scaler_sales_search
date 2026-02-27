@@ -6,7 +6,7 @@ A powerful Streamlit-based web application that streamlines the sales process by
 
 ## 🔗 Live Deployment
 
-**[Placeholder for Deployment Link]** *(Update this link once the application is deployed)*
+*https://scalersalessearch-2qe39qdjkcrjbe454llkym.streamlit.app/*
 
 ---
 
