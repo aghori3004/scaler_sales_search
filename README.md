@@ -1,11 +1,19 @@
 # Scaler Sales AI | Brochure Generator
 
-A powerful Streamlit-based web application that uses AI to map, search, and rank alumni profiles from a Scaler database based on lead context. It automatically generates personalized brochures from selected matching alumni to help the sales team close leads effectively.
+A powerful Streamlit-based web application that streamlines the sales process by leveraging AI to map, search, and rank alumni profiles from a Scaler database based on lead context. It automatically drafts personalized brochures from selected matching alumni to help the sales team close leads effectively.
+
+---
+
+## 🔗 Live Deployment
+
+**[Placeholder for Deployment Link]** *(Update this link once the application is deployed)*
+
+---
 
 ## 🌟 Key Features
 
 - **Contextual Semantic Search**: Uses Langchain and FAISS to search through a vector database of alumni.
-- **AI-Powered Extraction**: Maps user queries (lead context) to structured search parameters using NVIDIA AI Endpoints.
+- **AI-Powered Extraction**: Maps user queries (lead context) to structured search parameters using AI models.
 - **Intelligent Ranking System**: Employs Reciprocal Rank Fusion (RRF) to score and rank alumni based on structured exact matches and semantic vector proximity.
 - **Dynamic Brochure Generation**: Automatically drafts highly personalized, detailed brochures using the selected alumni profiles.
 - **Interactive UI**: View calculation breakpoints, detailed metrics, and available assets (LinkedIn, Video Testimonials, etc.) for each alum.

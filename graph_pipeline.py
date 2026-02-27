@@ -78,23 +78,45 @@ def hybrid_search(query_json, df, vectorstore):
     top_50 = sorted_df[sorted_df['rrf_score'] > 0.001].head(50).copy()
 
     # Generate Deterministic Match Explanations showing EXACT DB Values
-    reasons = []
+    detailed_calcs = []
     for _, row in top_50.iterrows():
-        matched_fields = []
+        calc_md = f"**Detailed Scoring Breakdown:**\n\n"
+        points_awarded = []
+        total_struct = 0.0
+        
         for field, val in query_json.items():
-            if val and field not in ['unstructured_intent', 'program'] and pd.notnull(row.get(field)):
+            weight = all_weights.get(field, 0)
+            if val and weight > 0 and pd.notnull(row.get(field)):
                 if isinstance(val, str) and str(val).lower() in str(row[field]).lower():
-                    matched_fields.append(f"- **{field.replace('_', ' ').title()}:** '{row[field]}' *(Matched query '{val}')*")
-                elif isinstance(val, (int, float)) and abs(pd.to_numeric(row[field], errors='coerce') - val) <= 1:
-                    matched_fields.append(f"- **{field.replace('_', ' ').title()}:** '{row[field]}' *(Matched near '{val}')*")
+                    points_awarded.append(f"- **{field.replace('_', ' ').title()}:** +{weight} pts *(Matched '{row[field]}')*")
+                    total_struct += weight
+                elif isinstance(val, (int, float)):
+                    num_val = pd.to_numeric(row[field], errors='coerce')
+                    if pd.notnull(num_val) and abs(num_val - val) <= 1:
+                        if num_val == val:
+                            points_awarded.append(f"- **{field.replace('_', ' ').title()}:** +{weight} pts *(Exact match '{val}')*")
+                            total_struct += weight
+                        else:
+                            points_awarded.append(f"- **{field.replace('_', ' ').title()}:** +{weight/2} pts *(Near match '{val}')*")
+                            total_struct += (weight/2)
+                            
+        s_rank = row.get('struct_rank', 0)
+        v_rank = row.get('vector_rank', 0)
+        has_content = row.get('has_content', 0)
         
-        reason_str = "\n".join(matched_fields)
-        if row['vector_rank'] <= 50 and unstructured_intent:
-            reason_str += f"\n- **Semantic Intent:** Strong match found for *'{unstructured_intent}'* in testimonials."
-            
-        reasons.append(reason_str.strip() if reason_str else "- Matched based on general profile similarity.")
+        calc_md += "► **Explicit Field Matches:**\n"
+        calc_md += "\n".join(points_awarded) if points_awarded else "- None"
+        calc_md += f"\n\n► **Total Structured Score:** `{total_struct}` -> resulting in **Rank {s_rank}**"
+        calc_md += f"\n► **Semantic Vector Rank:** **{v_rank}**"
         
-    top_50['match_reason'] = reasons
+        boost_str = " * 1.15 (Content Boost)" if has_content else ""
+        calc_md += f"\n\n► **Final RRF Equation:** `[{1:.4f} / (50 + {s_rank})] + [{1:.4f} / (60 + {v_rank})]{boost_str}`"
+        calc_md += f"\n► **Final Score:** `{row.get('rrf_score', 0):.5f}`"
+        
+        detailed_calcs.append(calc_md)
+        
+    top_50['detailed_calc_markdown'] = detailed_calcs
+    top_50['match_reason'] = [c.split("► **Total")[0].replace("► **Explicit Field Matches:**\n", "").strip() for c in detailed_calcs]
     return top_50
 
 df_master, vectorstore_master = load_databases()
@@ -162,12 +184,19 @@ def get_valid_values_context():
 
 def node_extract_raw(state: AgentState) -> dict:
     query = state["query"]
-    llm = ChatNVIDIA(model="meta/llama-3.1-70b-instruct", temperature=0.0, max_completion_tokens=1024)
+    llm = ChatNVIDIA(
+        model="meta/llama-3.1-70b-instruct",
+        api_key="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", 
+        temperature=0.2,
+        top_p=0.7,
+        max_tokens=1024,
+    )
     parser = PydanticOutputParser(pydantic_object=LeadExtraction)
     
     system_prompt = f"""
-    Extract explicit entities and implicitly guess categories based on the user's query.
-    CRITICAL RULE: You MAY implicitly guess categories (e.g. "from Orissa" -> origin_tier), BUT the datatype MUST perfectly match the unique values provided below.
+    You are a data extraction API. Extract explicit entities and implicitly guess categories based on the user's query.
+    CRITICAL RULE 1: You MAY implicitly guess categories (e.g. "from Orissa" -> origin_tier), BUT the datatype MUST perfectly match the unique values provided below.
+    CRITICAL RULE 2: You MUST reply with ONLY valid JSON. Do not include markdown formatting (like ```json), do not include any conversational text. Return ONLY the raw JSON object.
     
     {get_valid_values_context()}
     
@@ -184,18 +213,30 @@ def node_extract_raw(state: AgentState) -> dict:
             time.sleep(2)
     return {"raw_extraction": {}}
 
-def lookup_csv(filename: str, key_col: str, val_col: str, search_val: str) -> Optional[str]:
+def lookup_csv_with_llm(filename: str, key_col: str, val_col: str, search_val: str, llm) -> Optional[tuple]:
     if not search_val: return None
     path = os.path.join('db', filename)
     if not os.path.exists(path): return None
     df = pd.read_csv(path)
     
     match = df[df[key_col].astype(str).str.lower() == str(search_val).lower()]
-    if not match.empty: return str(match.iloc[0][val_col])
+    if not match.empty: return (str(match.iloc[0][val_col]), str(match.iloc[0][key_col]))
     
-    valid_keys = df[key_col].dropna().astype(str).tolist()
-    closest_matches = difflib.get_close_matches(str(search_val), valid_keys, n=1, cutoff=0.8)
-    if closest_matches: return str(df[df[key_col] == closest_matches[0]].iloc[0][val_col])
+    valid_keys = df[key_col].dropna().astype(str).unique().tolist()
+    closest_matches = difflib.get_close_matches(str(search_val), valid_keys, n=1, cutoff=0.85)
+    if closest_matches: 
+        best_match = closest_matches[0]
+        return (str(df[df[key_col] == best_match].iloc[0][val_col]), best_match)
+        
+    try:
+        prompt = f"Map the extracted value '{search_val}' to the exact matching correct entity from this list. \nList: {', '.join(valid_keys)}.\nReply with ONLY the exact string from the list. If there is NO logical match at all, reply with 'NONE'."
+        response = llm.invoke([("user", prompt)])
+        llm_match = response.content.strip()
+        if llm_match in valid_keys:
+            return (str(df[df[key_col] == llm_match].iloc[0][val_col]), llm_match)
+    except Exception as e:
+        pass
+        
     return None
 
 def node_map_categories(state: AgentState) -> dict:
@@ -211,10 +252,22 @@ def node_map_categories(state: AgentState) -> dict:
         ('current_city', 'current_city_tier', 'current_city_mapping.csv'),
         ('batch_year', 'batch_category', 'batch_year_mapping.csv')
     ]
+    
+    # Ultra-low constraints to force the LLM to only output the exact dictionary string without hallucination/conversation
+    llm_mapper = ChatNVIDIA(
+        model="meta/llama-3.1-70b-instruct",
+        api_key="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", 
+        temperature=0.0,
+        top_p=0.1,
+        max_tokens=1024,
+    )
+    
     for raw_f, cat_f, filename in mapping_rules:
         if mapped.get(raw_f) and not mapped.get(cat_f):
-            found_val = lookup_csv(filename, raw_f, cat_f, mapped[raw_f])
-            if found_val: mapped[cat_f] = found_val
+            result = lookup_csv_with_llm(filename, raw_f, cat_f, mapped[raw_f], llm_mapper)
+            if result: 
+                mapped[cat_f] = result[0]
+                mapped[raw_f] = result[1]
 
     exp, growth = mapped.get('experience'), mapped.get('growth')
     if exp is not None and not mapped.get('experience_zone'):
@@ -252,7 +305,14 @@ def generate_brochure_from_selection(query: str, selected_profiles: list) -> str
         if alum.get('video_blog'): profiles_text += f"- **Video:** {alum.get('video_blog')}\n"
         if alum.get('quora_blog'): profiles_text += f"- **Quora:** {alum.get('quora_blog')}\n"
 
-    llm = ChatNVIDIA(model="meta/llama-3.1-70b-instruct", temperature=0.7, max_completion_tokens=2000)
+    # High creativity and length allowances to enable the model to draft a persuasive, fluid marketing sales pitch
+    llm = ChatNVIDIA(
+        model="meta/llama-3.1-70b-instruct",
+        api_key="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", 
+        temperature=0.7,
+        top_p=0.7,
+        max_tokens=1024,
+    )
     prompt = ChatPromptTemplate.from_messages([
         ("system", "You are an expert sales copywriter. Output a highly detailed, personalized pitch brochure for the selected alumni. Detail their complete journey (Education, Pre-Scaler struggles/background, and Post-Scaler success). DO NOT include generic fluff, but DO write compelling paragraph descriptions for each alum incorporating all the provided detailed data points (Tiers, Segments, Growth, etc). You MUST explicitly include all the URLs provided for each alum in Markdown."),
         ("user", "Lead Context: {lead_context}\n\nProfiles Data:\n{profiles}\n\nWrite the detailed pitch.")

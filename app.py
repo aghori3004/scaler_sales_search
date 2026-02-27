@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import time
 from dotenv import load_dotenv
 
 from graph_pipeline import run_search_pipeline, generate_brochure_from_selection
@@ -40,9 +41,19 @@ else:
     with st.container():
         query = st.text_area("Enter Lead Context:", height=100, placeholder="e.g. someone from orissa wants to join google")
         
+        
         if st.button("🔍 Search Alumni Database", type="primary"):
-            with st.spinner("🤖 AI is extracting, mapping, and searching..."):
-                st.session_state.search_state = run_search_pipeline(query)
+            with st.status("🤖 Analyzing lead context...", expanded=True) as status:
+                st.write("Extracting structured criteria using AI...")
+                time.sleep(1) # Visual pacing
+                st.write("Mapping criteria to database sectors...")
+                
+                # We call the pipeline
+                result = run_search_pipeline(query)
+                
+                st.write("Ranking top 50 alumni via Hybrid RRF Search...")
+                st.session_state.search_state = result
+                status.update(label="✅ Search Complete!", state="complete", expanded=False)
 
     if st.session_state.search_state:
         state = st.session_state.search_state
@@ -62,7 +73,7 @@ else:
                 
                 with col_check:
                     st.write(""); st.write("") 
-                    if st.checkbox("", key=f"check_{idx}"):
+                    if st.checkbox("Select Alum", key=f"check_{idx}", label_visibility="hidden"):
                         selected_alumni.append(row)
                 
                 with col_img:
@@ -84,14 +95,10 @@ else:
                         st.markdown(f"### {row.get('name', 'Alumni')}")
                     with header_col2:
                         st.write("") 
-                        # Advanced Popover logic showing the exact math and explaining the K constants
                         with st.popover(f"ℹ️ Score: {row.get('rrf_score', 0):.4f}"):
-                            st.markdown(f"**Detailed Calculation Breakdown:**\n\n"
-                                        f"► **Equation:** `RRF = {calc_equation}`\n\n"
-                                        f"*(Note: 50 and 60 are 'k' smoothing constants in the Reciprocal Rank Fusion formula. The 50 denominator gives slightly more weight to structured exact matches, while the 60 denominator gracefully balances semantic intent rankings.)*\n\n"
-                                        f"► **Total RRF Score:** `{row.get('rrf_score', 0):.5f}`\n"
-                                        f"► **Structured Points:** `{row.get('struct_score', 0)}` (Rank: {s_rank})\n"
-                                        f"► **Semantic Vector Rank:** `{v_rank}`")
+                            detailed_md = row.get('detailed_calc_markdown', "Score calculation not available.")
+                            st.markdown(detailed_md)
+                            st.caption("*(Note: 50 and 60 are 'k' smoothing constants in the Reciprocal Rank Fusion formula. The 50 denominator gives slightly more weight to structured exact matches, while the 60 denominator gracefully balances semantic intent rankings.)*")
                     
                     st.caption(f"Program: {row.get('program_label', 'N/A')} | Batch: {row.get('batch_year', '')} {row.get('batch', '')}")
                     
@@ -118,7 +125,7 @@ else:
             if not selected_alumni:
                 st.warning("Please select at least one alum to generate a brochure.")
             else:
-                with st.spinner("Drafting highly detailed personalized brochure..."):
+                with st.spinner("⏳ Drafting highly detailed personalized brochure using AI... This may take up to 30 seconds."):
                     # Save the result to session state and rerun to trigger the "New Screen" view
                     st.session_state.brochure_content = generate_brochure_from_selection(state["query"], selected_alumni)
                     st.rerun()
